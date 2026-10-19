@@ -1,0 +1,37 @@
+[project]
+name = "qwen-grpo"
+version = "0.1.0"
+description = "Post-training of Qwen2.5 with GRPO for mathematical reasoning"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4",
+    "transformers>=4.46",
+    "trl>=0.21",
+    "peft>=0.14",
+    "accelerate>=1.0",
+    "datasets>=3.0",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+qwen-grpo-train = "qwen_grpo.train:main"
+qwen-grpo-eval = "qwen_grpo.evaluate:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<1"]
+build-backend = "uv_build"
+
+# Windows note: PyPI's torch is CPU-only by default, so pin torch (and the
+# CUDA-dependent pieces) to the official PyTorch cu128 index for GPU training.
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

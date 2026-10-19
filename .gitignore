@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# uv
+uv.lock.bak
+
+# Training artifacts
+outputs/
+checkpoints/
+*.bin
+*.safetensors
+adapter_model.safetensors
+
+# IDE
+.idea/
+.vscode/
+
+# Private notes (interview prep, not for public repo)
+INTERVIEW_NOTES.md
