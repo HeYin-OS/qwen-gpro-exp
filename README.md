@@ -1,74 +1,100 @@
-# qwen-grpo
+# 基于 GRPO 的电商订单金额核算与优惠规则推理优化
 
-基于 **GRPO**（Group Relative Policy Optimization，组相对策略优化）对 **Qwen2.5-1.5B-Instruct** 做数学推理后训练，训练栈为 TRL + PEFT（LoRA）。奖励完全由规则验证，无需 judge 模型：答案正确性（1.0）+ 格式合规（0.2），与 GSM8K 标准答案比对。
+基于 **Qwen2.5-1.5B-Instruct**、**TRL GRPOTrainer** 和 **PEFT（LoRA）**，探索在电商订单结算场景中，借助可自动验证的规则奖励，提高模型对多步金额计算和优惠约束的遵循能力。
 
-## 工作原理
+> **项目状态**：本 README 描述新的电商业务目标。仓库目前实现的是基于 **GSM8K** 的 GRPO 数学推理实验，尚未实现订单数据生成、结算规则引擎及电商业务奖励；下文将业务设计与原有可运行基线区分展示。
 
+## 项目背景
+
+订单结算涉及商品单价与数量、满减门槛、优惠券使用条件、叠加顺序和运费规则。自然语言推理容易出现算术错误或规则使用不一致。项目拟使用确定性订单结算程序产生标准答案，并以**金额正确性、优惠规则遵循和输出格式**构建 GRPO 奖励，优化模型的可验证推理表现。
+
+## 任务与规则设计（待实现）
+
+输入包括商品清单、数量、价格、满减条件、优惠券门槛与运费规则，模型输出结算步骤及最终应付金额。对于优惠叠加顺序、券门槛计算时点和包邮条件，必须在每条样本中明确约定，避免出现多个合理答案。
+
+示例（**目标业务样本，不是现有训练集**）：
+
+```text
+商品 A：2 件，每件 120 元。
+优惠：商品原价满 200 减 20 元；另有满 200 减 10 元优惠券。
+规则：优惠券门槛按商品原价判断，两种优惠可叠加；折扣后金额满 99 元包邮。
 ```
-GSM8K 题目 ──► GRPOTrainer (TRL)
-               ├── 每个 prompt 采样 num_generations=8 个候选（组采样）
-               ├── 由规则奖励计算组内相对优势
-               ├── PPO 式裁剪 (ε=0.2) + KL 正则 (β=0.04)
-               └── LoRA adapter (r=32，仅注意力投影；底座权重冻结)
-```
 
-- **训练**：`src/qwen_grpo/train.py` — 通过 `configs/*.yaml` 配置（未知键会被拒绝）
-- **评测**：`src/qwen_grpo/evaluate.py` — base 与微调模型在 500 道 held-out 题上对比（准确率 / 格式合规率 / 生成长度）
-- **奖励**：`src/qwen_grpo/rewards.py` + `answer_utils.py` — 用 `Fraction` 做精确数值等价比较（"0.5" ≡ "1/2" ≡ "0.50"）
+按该样本的约定，商品金额 `240` 元，满减 `20` 元，优惠券 `10` 元，运费 `0` 元，**最终应付 `210` 元**。
 
-## 结果
+拟使用 Python `Decimal` 实现确定性结算程序，输出标准金额、优惠资格判断与计算明细，作为训练奖励和独立评测的依据。边界样本包括刚好达到满减门槛、无效优惠券、叠加限制及运费门槛附近的订单。
 
-训练 rollout 正确率（correctness 奖励均值）：**早期 ~5.5% → 后期 ~29%，峰值 39%**，共 125 步、1,000 道 GSM8K 题目，单张 RTX 4070 Laptop（8 GB），耗时约 4 小时。
+## 技术方案
 
-| 指标 (200 道 held-out，贪心解码) | Base | GRPO |
-|---|---|---|
-| 答案准确率（可验证格式下） | 0.0% | **38.5%** |
-| 格式遵循率 | 0.5% | **55.5%** |
+1. **可验证规则奖励**：用结算程序核验最终应付金额，分别检查优惠资格、计算顺序及结构化答案格式；错误金额与不符合规则的中间步骤不能仅因格式正确而获得完整奖励。
+2. **GRPO 策略优化**：使用 TRL `GRPOTrainer`，每个 Prompt 采样 **8** 个候选回答，根据组内相对优势与 PPO-style Clipping 更新 LoRA 参数，冻结基座模型权重，实现单卡后训练。
+
+现有仓库已实现 TRL GRPO、组采样、LoRA 及基于 GSM8K 标准答案的数值正确性／格式奖励。**电商订单奖励函数和规则引擎仍需开发**。
+
+## 评估方案与结果
+
+新业务场景将基于固定独立订单测试集，以确定性结算结果为标准，统计最终金额准确率、优惠规则遵循率和可解析答案比例，并单独分析多重优惠、门槛边界等子集。
+
+| 指标 | 基座模型 | GRPO 后 | 状态 |
+| --- | ---: | ---: | --- |
+| 最终金额准确率 | 62% | 74% | **简历草稿占位值，未实测** |
+| 优惠规则遵循率 | 76% | 86% | **简历草稿占位值，未实测** |
+| 结构化答案解析成功率 | — | — | 待评估 |
+
+### 已完成的 GSM8K 基线实验（非电商数据）
+
+原实验使用 1,000 道 GSM8K 训练题、125 步、单张 RTX 4070 Laptop（8 GB），耗时约 4 小时。训练 Rollout 正确性奖励均值由早期约 **5.5%** 提升至后期约 **29%**，峰值 **39%**。
+
+| 指标（200 道 held-out，贪心解码） | Base | GRPO |
+| --- | ---: | ---: |
+| 可验证格式下的答案准确率 | 0.0% | 38.5% |
+| 格式遵循率 | 0.5% | 55.5% |
 | 平均生成长度（字符） | 931 | 860 |
 
-注：Base 准确率为 0 是因为它几乎不按 `#### <答案>` 格式输出（0.5%），答案无法解析即计 0 —— 该口径衡量的是"在可验证答案格式约束下"的准确率，而非模型的原始数学能力。
+**口径说明**：Base 的 0.0% 主要源于其几乎不输出要求的 `#### <答案>` 格式，无法解析即计错误；不能据此断言基座模型的数学能力为零，也不能将这些数值当作电商任务实验结果。
 
-## 环境配置
+## 运行现有 GSM8K 基线
 
-要求 Python ≥ 3.10、[uv](https://docs.astral.sh/uv/)、NVIDIA GPU（支持 bf16）、约 7 GB 空闲显存。
-
-```bash
-uv sync          # 安装 CUDA 版 torch (cu128 源) 及全部依赖到 .venv
-```
-
-如果 huggingface.co 无法直连，使用镜像：
+需要 Python ≥ 3.10、[uv](https://docs.astral.sh/uv/) 和支持 BF16 的 NVIDIA GPU，原实验环境约需 7 GB 空闲显存。
 
 ```bash
-export HF_ENDPOINT=https://hf-mirror.com   # Windows: set HF_ENDPOINT=https://hf-mirror.com
-```
+uv sync
 
-## 使用方法
-
-```bash
-# 训练（超参数见 configs/gsm8k_4070.yaml）
+# GSM8K 训练（目前可运行的配置）
 uv run qwen-grpo-train --config configs/gsm8k_4070.yaml
 
-# 也可以用命令行覆盖个别参数
+# 覆盖训练参数
 uv run qwen-grpo-train --config configs/gsm8k_4070.yaml --train-size 500 --lr 2e-5
 
-# 在 held-out 测试集上评测 base vs 微调模型
+# GSM8K held-out 评估
 uv run qwen-grpo-eval --base Qwen/Qwen2.5-1.5B-Instruct --adapter outputs/grpo \
     --out outputs/eval_results.json
 
-# 运行测试
 uv run pytest
 ```
 
-## 项目结构
+如无法直连 Hugging Face，可设置镜像：
 
+```bash
+export HF_ENDPOINT=https://hf-mirror.com  # Windows CMD: set HF_ENDPOINT=https://hf-mirror.com
 ```
-configs/            gsm8k_4070.yaml (单张 8GB 显卡配置), default.yaml
+
+## 代码结构（当前仓库）
+
+```text
+configs/            GSM8K / 单卡训练配置
 src/qwen_grpo/
-  prompts.py        指令模板，"#### <answer>" 答案格式
-  answer_utils.py   答案解析 + 精确数值等价比较
-  rewards.py        正确性 / 格式奖励函数
-  data.py           GSM8K 加载，确定性 train/test 划分（无泄漏）
+  prompts.py        GSM8K 指令模板及答案格式
+  answer_utils.py   数值答案解析与等价比较
+  rewards.py        GSM8K 正确性／格式奖励
+  data.py           GSM8K 加载及 train/test 划分
   train.py          GRPO 训练入口
-  evaluate.py       base vs 微调模型评测
-tests/              23 个单元测试
+  evaluate.py       Base 与 GRPO 模型评估
+tests/              单元测试
 ```
+
+## 下一步
+
+- 新增订单样本生成与规则引擎，明确优惠计算顺序，使用 `Decimal` 避免金额浮点误差。
+- 将订单金额、优惠遵循和格式检查接入 GRPO 奖励，并为边界条件添加单元测试。
+- 在相同订单测试集上对比 Base / GRPO，替换占位指标并补充错误案例分析。
